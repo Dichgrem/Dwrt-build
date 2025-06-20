@@ -122,7 +122,7 @@ jobs:
           ccache -s || true
 
       - name: 上传固件 Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: openwrt-${{ matrix.TARGET || 'all' }}-${{ matrix.PROFILE || 'all' }}
           path: |

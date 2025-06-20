@@ -141,7 +141,7 @@ jobs:
 
       - name: 上传 SDK
         if: steps.check-sdk.outputs.exists == 'true'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: sdk-${{ matrix.TARGET || 'all' }}-${{ matrix.PROFILE || 'all' }}
           path: staging_dir/toolchain-*/*

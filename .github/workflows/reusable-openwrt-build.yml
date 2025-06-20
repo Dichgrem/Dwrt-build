@@ -68,7 +68,6 @@ jobs:
           ts = [t.strip() for t in os.getenv('TARGETS','').split(',') if t.strip()]
           ps = [p.strip() for p in os.getenv('PROFILES','').split(',') if p.strip()]
           matrix = {'include': []}
-          # 如果用户未指定任意 targets 或 profiles，则也允许空值一次性编译
           if not ts: ts = ['']
           if not ps: ps = ['']
           for t in ts:
@@ -130,9 +129,18 @@ jobs:
             bin/targets/${{ matrix.TARGET }}/${{ matrix.PROFILE }}/*.img
             bin/targets/${{ matrix.TARGET }}/${{ matrix.PROFILE }}/*.tar
 
-      - name: 上传 SDK（可选）
-        if: exists('staging_dir/toolchain-*')
+      - name: 检查 SDK 是否存在
+        id: check-sdk
+        run: |
+          if compgen -G "staging_dir/toolchain-*" > /dev/null; then
+            echo "::set-output name=exists::true"
+          else
+            echo "::set-output name=exists::false"
+          fi
+
+      - name: 上传 SDK
+        if: steps.check-sdk.outputs.exists == 'true'
         uses: actions/upload-artifact@v3
         with:
-          name: sdk-${{ matrix.TARGET }}-${{ matrix.PROFILE }}
+          name: sdk-${{ matrix.TARGET || 'all' }}-${{ matrix.PROFILE || 'all' }}
           path: staging_dir/toolchain-*/*

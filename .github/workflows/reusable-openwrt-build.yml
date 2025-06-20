@@ -45,19 +45,20 @@ jobs:
         id: set-repo
         run: |
           case "${{ inputs.source_repo }}" in
-            x-wrt)       URL="https://github.com/x-wrt/x-wrt.git" ;;
-            openwrt)     URL="https://git.openwrt.org/openwrt/openwrt.git" ;;
-            lienol)      URL="https://github.com/Lienol/openwrt.git" ;;
-            lede)        URL="https://github.com/coolsnowwolf/lede.git" ;;
-            immortalwrt) URL="https://github.com/immortalwrt/immortalwrt.git" ;;
+            x-wrt)       URL="https://github.com/x-wrt/x-wrt.git";       SHORT="x-wrt/x-wrt" ;;
+            openwrt)     URL="https://git.openwrt.org/openwrt/openwrt.git"; SHORT="openwrt/openwrt" ;;
+            lienol)      URL="https://github.com/Lienol/openwrt.git";    SHORT="Lienol/openwrt" ;;
+            lede)        URL="https://github.com/coolsnowwolf/lede.git"; SHORT="coolsnowwolf/lede" ;;
+            immortalwrt) URL="https://github.com/immortalwrt/immortalwrt.git"; SHORT="immortalwrt/immortalwrt" ;;
             *) echo "未知仓库: ${{ inputs.source_repo }}" >&2; exit 1 ;;
           esac
           echo "::set-output name=repo_url::${URL}"
+          echo "::set-output name=repo_short::${SHORT}"
 
       - name: Checkout 源码
         uses: actions/checkout@v4
         with:
-          repository: ${{ steps.set-repo.outputs.repo_url }}
+          repository: ${{ steps.set-repo.outputs.repo_short }}
           ref: ${{ inputs.openwrt_branch }}
 
       - name: 生成编译矩阵

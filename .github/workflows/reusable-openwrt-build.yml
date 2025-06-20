@@ -1,0 +1,138 @@
+# .github/workflows/reusable-openwrt-build.yml
+
+name: Reusable OpenWrt Builder
+
+on:
+  workflow_call:
+    inputs:
+      source_repo:
+        required: true
+        type: string
+        description: "源仓库选项：x-wrt / openwrt / lienol / lede / immortalwrt"
+      openwrt_branch:
+        required: true
+        type: string
+        description: "源码分支或 tag"
+      config_path:
+        required: true
+        type: string
+        description: "Config 文件路径（相对仓库根目录）"
+      targets:
+        required: false
+        type: string
+        default: ""
+        description: "编译目标平台列表（逗号分隔）"
+      profiles:
+        required: false
+        type: string
+        default: ""
+        description: "设备 Profile 列表（逗号分隔）"
+      parallel_jobs:
+        required: false
+        type: string
+        default: "4"
+        description: "make -jN 并行线程数"
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      repo_url: ${{ steps.set-repo.outputs.repo_url }}
+      matrix: ${{ steps.gen-matrix.outputs.matrix }}
+
+    steps:
+      - name: 设置实际仓库 URL
+        id: set-repo
+        run: |
+          case "${{ inputs.source_repo }}" in
+            x-wrt)       URL="https://github.com/x-wrt/x-wrt.git" ;;
+            openwrt)     URL="https://git.openwrt.org/openwrt/openwrt.git" ;;
+            lienol)      URL="https://github.com/Lienol/openwrt.git" ;;
+            lede)        URL="https://github.com/coolsnowwolf/lede.git" ;;
+            immortalwrt) URL="https://github.com/immortalwrt/immortalwrt.git" ;;
+            *) echo "未知仓库: ${{ inputs.source_repo }}" >&2; exit 1 ;;
+          esac
+          echo "::set-output name=repo_url::${URL}"
+
+      - name: Checkout 源码
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.set-repo.outputs.repo_url }}
+          ref: ${{ inputs.openwrt_branch }}
+
+      - name: 生成编译矩阵
+        id: gen-matrix
+        run: |
+          python3 - <<'EOF'
+          import os, json
+          ts = [t.strip() for t in os.getenv('TARGETS','').split(',') if t.strip()]
+          ps = [p.strip() for p in os.getenv('PROFILES','').split(',') if p.strip()]
+          matrix = {'include': []}
+          # 如果用户未指定任意 targets 或 profiles，则也允许空值一次性编译
+          if not ts: ts = ['']
+          if not ps: ps = ['']
+          for t in ts:
+            for p in ps:
+              matrix['include'].append({'TARGET': t, 'PROFILE': p})
+          print("::set-output name=matrix::" + json.dumps(matrix))
+          EOF
+        env:
+          TARGETS: ${{ inputs.targets }}
+          PROFILES: ${{ inputs.profiles }}
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+
+    steps:
+      - name: Restore download cache
+        uses: actions/cache@v3
+        with:
+          path: dl
+          key: dl-${{ matrix.TARGET || 'all' }}-${{ matrix.PROFILE || 'all' }}
+
+      - name: Restore build cache
+        uses: actions/cache@v3
+        with:
+          path: build_dir
+          key: build-${{ matrix.TARGET || 'all' }}-${{ matrix.PROFILE || 'all' }}
+
+      - name: 安装并配置 ccache
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache
+          echo "CONFIG_CCACHE=y" >> .config
+          echo "CONFIG_CCACHE_DIR=${RUNNER_TOOL_CACHE}/ccache" >> .config
+
+      - name: 应用用户 .config
+        run: |
+          cat ${{ inputs.config_path }} >> .config
+          make defconfig
+
+      - name: 编译固件
+        run: |
+          MAKE_ARGS="TARGET=${{ matrix.TARGET }} PROFILE=${{ matrix.PROFILE }} -j${{ inputs.parallel_jobs }}"
+          make ${MAKE_ARGS}
+
+      - name: ccache 统计
+        if: always()
+        run: |
+          ccache -s || true
+
+      - name: 上传固件 Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: openwrt-${{ matrix.TARGET || 'all' }}-${{ matrix.PROFILE || 'all' }}
+          path: |
+            bin/targets/${{ matrix.TARGET }}/${{ matrix.PROFILE }}/*.bin
+            bin/targets/${{ matrix.TARGET }}/${{ matrix.PROFILE }}/*.img
+            bin/targets/${{ matrix.TARGET }}/${{ matrix.PROFILE }}/*.tar
+
+      - name: 上传 SDK（可选）
+        if: exists('staging_dir/toolchain-*')
+        uses: actions/upload-artifact@v3
+        with:
+          name: sdk-${{ matrix.TARGET }}-${{ matrix.PROFILE }}
+          path: staging_dir/toolchain-*/*

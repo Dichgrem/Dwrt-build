@@ -1,0 +1,52 @@
+name: OpenWrt Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_repo:
+        description: "选择要编译的 OpenWrt 源仓库"
+        required: true
+        type: choice
+        options:
+          - x-wrt
+          - openwrt
+          - lienol
+          - lede
+          - immortalwrt
+        default: openwrt
+
+      openwrt_branch:
+        description: "源码分支或 tag"
+        required: true
+        default: "openwrt-23.05"
+
+      config_path:
+        description: "Config 文件路径（相对仓库根目录）"
+        required: true
+        default: "configs/ath79-device.config"
+
+      targets:
+        description: "编译目标平台（逗号分隔，如 x86,arm_cortex-a9）"
+        required: false
+        default: "x86,arm_cortex-a9"
+
+      profiles:
+        description: "设备 Profile 列表（逗号分隔）"
+        required: false
+        default: "generic,usb-boot"
+
+      parallel_jobs:
+        description: "make -jN 并行线程数"
+        required: false
+        default: "8"
+
+jobs:
+  build:
+    uses: ./.github/workflows/reusable-openwrt-build.yml
+    with:
+      source_repo: ${{ inputs.source_repo }}
+      openwrt_branch: ${{ inputs.openwrt_branch }}
+      config_path: ${{ inputs.config_path }}
+      targets: ${{ inputs.targets }}
+      profiles: ${{ inputs.profiles }}
+      parallel_jobs: ${{ inputs.parallel_jobs }}

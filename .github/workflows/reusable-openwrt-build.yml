@@ -51,8 +51,8 @@ jobs:
             immortalwrt) URL="https://github.com/immortalwrt/immortalwrt.git"; SHORT="immortalwrt/immortalwrt" ;;
             *) echo "未知仓库: ${{ inputs.source_repo }}" >&2; exit 1 ;;
           esac
-          echo "::set-output name=repo_url::${URL}"
-          echo "::set-output name=repo_short::${SHORT}"
+          echo "repo_url=${URL}" >> $GITHUB_OUTPUT
+          echo "repo_short=${SHORT}" >> $GITHUB_OUTPUT
 
       - name: 生成编译矩阵
         id: gen-matrix
@@ -67,7 +67,8 @@ jobs:
           for t in ts:
             for p in ps:
               matrix['include'].append({'TARGET': t, 'PROFILE': p})
-          print("::set-output name=matrix::" + json.dumps(matrix))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write("matrix=" + json.dumps(matrix) + "\n")
           EOF
         env:
           TARGETS: ${{ inputs.targets }}

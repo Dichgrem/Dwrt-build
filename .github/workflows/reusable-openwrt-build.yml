@@ -98,8 +98,12 @@ jobs:
             libelf-dev device-tree-compiler libgmp3-dev libmpc-dev libfuse-dev \
             libpam-dev libev-dev liblzma-dev libsnmp-dev
 
-      - name: 添加 feeds 源（如需额外 feeds）
+      - name: 添加 feeds 源（去重）
         run: |
+          # 删除重复行（如已有 packages 或 luci）
+          sed -i '/src-git packages/d' feeds.conf.default
+          sed -i '/src-git luci/d' feeds.conf.default
+          # 追加你自己的 feeds
           echo 'src-git packages https://github.com/openwrt/packages.git' >> feeds.conf.default
           echo 'src-git luci https://github.com/openwrt/luci.git' >> feeds.conf.default
 

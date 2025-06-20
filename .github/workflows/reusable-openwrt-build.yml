@@ -117,25 +117,6 @@ jobs:
         with:
           path: caller
 
-      - name: 恢复下载缓存
-        uses: actions/cache@v3
-        with:
-          path: dl
-          key: dl-${{ matrix.TARGET || 'all' }}-${{ matrix.PROFILE || 'all' }}
-
-      - name: 恢复编译缓存
-        uses: actions/cache@v3
-        with:
-          path: build_dir
-          key: build-${{ matrix.TARGET || 'all' }}-${{ matrix.PROFILE || 'all' }}
-
-      - name: 安装并配置 ccache
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ccache
-          echo "CONFIG_CCACHE=y" >> .config
-          echo "CONFIG_CCACHE_DIR=${RUNNER_TOOL_CACHE}/ccache" >> .config
-
       - name: 执行 diy 修改
         run: |
           chmod +x diy.sh
@@ -150,11 +131,6 @@ jobs:
         run: |
           MAKE_ARGS="TARGET=${{ matrix.TARGET }} PROFILE=${{ matrix.PROFILE }} -j${{ inputs.parallel_jobs }}"
           make ${MAKE_ARGS}
-
-      - name: 查看 ccache 统计
-        if: always()
-        run: |
-          ccache -s || true
 
       - name: 上传固件
         uses: actions/upload-artifact@v4

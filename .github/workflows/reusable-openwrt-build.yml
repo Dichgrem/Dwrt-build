@@ -136,6 +136,11 @@ jobs:
           echo "CONFIG_CCACHE=y" >> .config
           echo "CONFIG_CCACHE_DIR=${RUNNER_TOOL_CACHE}/ccache" >> .config
 
+      - name: 执行 diy 修改
+        run: |
+          chmod +x diy.sh
+          ./diy.sh
+
       - name: 应用用户 .config
         run: |
           cp caller/${{ inputs.config_path }} .config

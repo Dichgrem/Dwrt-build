@@ -121,6 +121,28 @@ jobs:
           echo 'src-git packages https://github.com/openwrt/packages.git' >> feeds.conf.default
           echo 'src-git luci https://github.com/openwrt/luci.git' >> feeds.conf.default
 
+      - name: 自动适配 feeds 源（适配 OpenWrt / ImmortalWrt）
+        run: |
+          # 判断当前 WRT 类型（根据 banner 或目录结构）
+          if grep -q 'ImmortalWrt' include/version.mk 2>/dev/null; then
+            echo "Detected: ImmortalWrt"
+            # 清理重复行
+            sed -i '/src-git packages/d' feeds.conf.default
+            sed -i '/src-git luci/d' feeds.conf.default
+            # 保留默认 ImmortalWrt feeds，不添加 openwrt 官方源
+            echo "Using ImmortalWrt default feeds"
+          elif grep -q 'OpenWrt' include/version.mk 2>/dev/null; then
+            echo "Detected: OpenWrt"
+            # 清理重复行
+            sed -i '/src-git packages/d' feeds.conf.default
+            sed -i '/src-git luci/d' feeds.conf.default
+            # 添加 OpenWrt 官方 feeds
+            echo 'src-git packages https://github.com/openwrt/packages.git' >> feeds.conf.default
+            echo 'src-git luci https://github.com/openwrt/luci.git' >> feeds.conf.default
+          else
+            echo "⚠️ 未识别的WRT类型，默认使用当前 feeds.conf.default"
+          fi
+
       - name: 更新并安装 feeds
         run: |
           ./scripts/feeds update -a

@@ -157,17 +157,3 @@ jobs:
             bin/targets/${{ matrix.TARGET }}/*/*.bin
             bin/targets/${{ matrix.TARGET }}/*/*.img
             bin/targets/${{ matrix.TARGET }}/*/*.tar
-
-      - name: 检查 SDK 是否存在
-        id: check-sdk
-        run: |
-          if compgen -G "staging_dir/toolchain-*" > /dev/null; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: 上传 SDK
-        if: steps.check-sdk.outputs.exists == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: sdk-${{ matrix.TARGET || 'all' }}-${{ matrix.PROFILE || 'all' }}
-          path: staging_dir/toolchain-*/*

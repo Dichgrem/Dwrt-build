@@ -142,7 +142,7 @@ jobs:
 
       - name: 编译工具链
         run: |
-          make toolchain/install -j$(nproc)
+          make toolchain/install -j1
 
       - name: 编译固件
         run: |

@@ -126,10 +126,6 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 下载所有依赖包
-        run: |
-          make download -j$(nproc) || make download -j1 V=s
-
       - name: Checkout 调用者仓库（用于读取 .config）
         uses: actions/checkout@v4
         with:
@@ -139,6 +135,10 @@ jobs:
         run: |
           cp caller/${{ inputs.config_path }} .config
           make defconfig
+
+      - name: 下载所有依赖包
+        run: |
+          make download -j$(nproc) || make download -j1 V=s
 
       - name: 编译工具链
         run: |

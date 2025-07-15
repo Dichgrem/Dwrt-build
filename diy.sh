@@ -5,12 +5,12 @@ set -e
 echo "🚀 添加自定义 feed 源..."
 
 # feeds.conf.default 文件存在才操作
-FEEDS_CONF="feeds.conf.default"
-if [ -f "$FEEDS_CONF" ]; then
-  # 示例：添加常见 feed（你可按需修改或注释掉）
+#FEEDS_CONF="feeds.conf.default"
+#if [ -f "$FEEDS_CONF" ]; then
+# 示例：添加常见 feed（你可按需修改或注释掉）
 #  grep -q '^src-git helloworld' "$FEEDS_CONF" || echo 'src-git helloworld https://github.com/fw876/helloworld' >>"$FEEDS_CONF"
 #  grep -q '^src-git passwall' "$FEEDS_CONF" || echo 'src-git passwall https://github.com/xiaorouji/openwrt-passwall' >>"$FEEDS_CONF"
-fi
+#fi
 
 echo "✅ feeds 添加完成"
 

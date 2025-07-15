@@ -1,8 +1,19 @@
-name: Build ImmortalWrt
+name: Build Custom WRT
 
 on:
   workflow_dispatch:
     inputs:
+      project:
+        description: "选择 WRT 项目"
+        required: true
+        default: "immortalwrt"
+        type: choice
+        options:
+          - openwrt
+          - immortalwrt
+          - x-wrt
+          - lienol
+          - lede
       version_type:
         description: "版本类型"
         required: true
@@ -14,7 +25,7 @@ on:
       branch:
         description: "snapshot-branch"
         required: false
-        default: "openwrt-24.10"
+        default: "master"
         type: string
       tag:
         description: "stable-tag"
@@ -22,7 +33,7 @@ on:
         default: "v24.10.2"
         type: string
       config_path:
-        description: "Config 路径"
+        description: "config路径"
         required: true
         default: "config/myconfig"
         type: string
@@ -39,18 +50,10 @@ jobs:
         id: refinfo
         run: |
           if [ "${{ inputs.version_type }}" = "snapshot" ]; then
-            echo "Using branch '${{ inputs.branch }}'"
             echo "ref=${{ inputs.branch }}" >> $GITHUB_OUTPUT
           else
-            echo "Using tag '${{ inputs.tag }}'"
             echo "ref=${{ inputs.tag }}" >> $GITHUB_OUTPUT
           fi
-
-      - name: Clone ImmortalWrt source
-        run: |
-          echo "📥 克隆 immortalwrt 仓库，ref=${{ steps.refinfo.outputs.ref }}"
-          git clone --branch "${{ steps.refinfo.outputs.ref }}" \
-            https://github.com/immortalwrt/immortalwrt.git immortalwrt
 
       - name: Install build dependencies
         run: |
@@ -66,8 +69,51 @@ jobs:
             uuid-dev device-tree-compiler antlr3 gperf \
             time bc jq xxd swig upx-ucl ccache ecj fastjar imagemagick
 
+      - name: Determine Git URL
+        id: projectinfo
+        run: |
+          case "${{ inputs.project }}" in
+            immortalwrt)
+              echo "url=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_OUTPUT
+              ;;
+            x-wrt)
+              echo "url=https://github.com/x-wrt/x-wrt.git" >> $GITHUB_OUTPUT
+              ;;
+            openwrt)
+              echo "url=https://git.openwrt.org/openwrt/openwrt.git" >> $GITHUB_OUTPUT
+              ;;
+            lienol)
+              echo "url=https://github.com/Lienol/openwrt.git" >> $GITHUB_OUTPUT
+              ;;
+            lede)
+              echo "url=https://github.com/coolsnowwolf/lede.git" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "❌ 未知项目: ${{ inputs.project }}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Clone selected WRT source
+        run: |
+          echo "📥 克隆 ${{ inputs.project }} 仓库，ref=${{ steps.refinfo.outputs.ref }}"
+          git clone --branch "${{ steps.refinfo.outputs.ref }}" \
+            "${{ steps.projectinfo.outputs.url }}" wrt
+
+      - name: Copy diy.sh to WRT
+        run: |
+          echo "📂 复制 diy.sh 到 wrt 目录"
+          cp diy.sh wrt/diy.sh
+
+      - name: Run diy.sh
+        working-directory: wrt
+        run: |
+          echo "🔧 执行 diy.sh"
+          chmod +x diy.sh
+          ./diy.sh
+
       - name: Update and install feeds
-        working-directory: immortalwrt
+        working-directory: wrt
         run: |
           echo "📦 更新 feeds"
           ./scripts/feeds update -a
@@ -76,50 +122,47 @@ jobs:
 
       - name: Setup configuration
         run: |
-          echo "📋 校验并复制配置：${{ inputs.config_path }} → immortalwrt/.config"
-          cp diy.sh immortalwrt/diy.sh
+          echo "📋 复制配置：${{ inputs.config_path }} → wrt/.config"
           if [ ! -f "${{ inputs.config_path }}" ]; then
             echo "❌ 找不到配置文件：${{ inputs.config_path }}"
             exit 1
           fi
-          cp "${{ inputs.config_path }}" immortalwrt/.config
-          cd immortalwrt
+          cp "${{ inputs.config_path }}" wrt/.config
+          cd wrt
           echo "🔄 运行 make oldconfig"
           make oldconfig
 
       - name: Download source packages
-        working-directory: immortalwrt
+        working-directory: wrt
         run: |
           echo "⬇️ 下载所有源码包"
           make download -j8
 
-      - name: Run diy.sh
-        working-directory: immortalwrt
-        run: |
-          echo "🔧 执行 diy.sh"
-          chmod +x diy.sh
-          ./diy.sh
-
-      - name: Build ImmortalWrt
-        working-directory: immortalwrt
+      - name: Build Firmware
+        working-directory: wrt
         run: |
           JOBS=$(nproc)
-          echo "🚀 开始全量编译（并行 ${JOBS}）"
+          echo "🚀 全量编译（并行 ${JOBS}）开始"
           START=$(date "+%Y-%m-%d %H:%M:%S")
-          echo "⏱️ 编译开始于: ${START}"
+          echo "⏱️ 编译开始：${START}"
           if ! time make world -j${JOBS} 2>&1 | tee build.log; then
             echo "❌ 编译失败，输出最后 100 行日志："
-            tail -n 100 build.log | sed 's/^/    /'
+            grep error ./build.log
             exit 1
           fi
           END=$(date "+%Y-%m-%d %H:%M:%S")
           echo "✅ 编译成功"
-          echo "⏱️ 开始: ${START}"
-          echo "⏱️ 结束: ${END}"
+          echo "⏱️ 结束：${END}"
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: immortalwrt-output
+          name: ${{ inputs.project }}-output
           path: |
-            immortalwrt/bin/targets/**/*.{img,bin,tar.gz,zip}
+            wrt/bin/targets/**/*.{img,bin,tar.gz,zip}
+
+      - name: Upload build log
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.project }}-build-log
+          path: wrt/build.log

@@ -33,9 +33,14 @@ on:
         default: "v24.10.2"
         type: string
       config_path:
-        description: "config路径"
+        description: "config 路径"
         required: true
         default: "config/myconfig"
+        type: string
+      threads:
+        description: "编译线程数（留空或填写 0 则自动使用 nproc）"
+        required: false
+        default: "0"
         type: string
 
 jobs:
@@ -55,7 +60,7 @@ jobs:
             echo "ref=${{ inputs.tag }}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -67,7 +72,8 @@ jobs:
             findutils grep sed help2man texinfo \
             libelf-dev libfuse-dev liblzma-dev libxml2-dev libyaml-dev \
             uuid-dev device-tree-compiler antlr3 gperf \
-            time bc jq xxd swig upx-ucl ccache ecj fastjar imagemagick
+            time bc jq xxd swig upx-ucl ccache ecj fastjar imagemagick \
+            llvm linux-tools-common libbpf-dev linux-tools-$(uname -r)
 
       - name: Determine Git URL
         id: projectinfo
@@ -94,13 +100,15 @@ jobs:
               ;;
           esac
 
-      - name: Clone selected WRT source
+      - name: Clone repository
         run: |
-          echo "📥 克隆 ${{ inputs.project }} 仓库，ref=${{ steps.refinfo.outputs.ref }}"
-          git clone --branch "${{ steps.refinfo.outputs.ref }}" \
-            "${{ steps.projectinfo.outputs.url }}" wrt
+          echo "📥 克隆 ${{ inputs.project }} 仓库"
+          git clone "${{ steps.projectinfo.outputs.url }}" wrt
+          cd wrt
+          echo "🔖 切换到版本：${{ steps.refinfo.outputs.ref }}"
+          git checkout "${{ steps.refinfo.outputs.ref }}"
 
-      - name: Copy diy.sh to WRT
+      - name: Copy diy.sh
         run: |
           echo "📂 复制 diy.sh 到 wrt 目录"
           cp diy.sh wrt/diy.sh
@@ -128,6 +136,16 @@ jobs:
             exit 1
           fi
           cp "${{ inputs.config_path }}" wrt/.config
+
+          # 校验 .config 是否与原始配置完全相同
+          if cmp -s "${{ inputs.config_path }}" wrt/.config; then
+            echo "✅ .config 与 ${{ inputs.config_path }} 完全一致"
+          else
+            echo "❌ .config 与 ${{ inputs.config_path }} 不一致，输出差异："
+            diff -u "${{ inputs.config_path }}" wrt/.config || true
+            exit 1
+          fi
+
           cd wrt
           echo "🔄 运行 make oldconfig"
           make oldconfig
@@ -136,33 +154,73 @@ jobs:
         working-directory: wrt
         run: |
           echo "⬇️ 下载所有源码包"
-          make download -j8
+
+          if [ "${{ inputs.threads }}" = "0" ] || [ -z "${{ inputs.threads }}" ]; then
+            JOBS=$(nproc)
+          else
+            JOBS=${{ inputs.threads }}
+          fi
+
+          set -o pipefail
+          if ! make download -j${JOBS}; then
+            echo "⚠️ 多线程下载失败，尝试单线程下载..."
+            make download -j1
+          fi
 
       - name: Build Firmware
         working-directory: wrt
         run: |
-          JOBS=$(nproc)
+          if [ "${{ inputs.threads }}" = "0" ] || [ -z "${{ inputs.threads }}" ]; then
+            JOBS=$(nproc)
+          else
+            JOBS=${{ inputs.threads }}
+          fi
+
           echo "🚀 全量编译（并行 ${JOBS}）开始"
           START=$(date "+%Y-%m-%d %H:%M:%S")
           echo "⏱️ 编译开始：${START}"
-          if ! time make world -j${JOBS} 2>&1 | tee build.log; then
-            echo "❌ 编译失败，输出最后 100 行日志："
-            grep error ./build.log
+
+          set -o pipefail
+
+          # 第一次尝试多线程编译，并保存日志
+          if ! (time make world -j${JOBS} 2>&1 | tee world_debug.log); then
+            echo "⚠️ 多线程编译失败，尝试使用单线程并输出详细信息..."
+
+            # 单线程模式输出详细信息，并追加到同一日志
+            time make world -j1 V=s 2>&1 | tee -a world_debug.log
+
+            echo "❌ 单线程编译后依然失败，以下是匹配关键字的错误行："
+            grep -E -i "(error:|failed|fatal|cannot install package)" -n world_debug.log || true
+
             exit 1
           fi
+
           END=$(date "+%Y-%m-%d %H:%M:%S")
           echo "✅ 编译成功"
-          echo "⏱️ 结束：${END}"
+          echo "⏱️ 编译结束：${END}"
+
+      - name: list all target files
+        run: |
+          echo ">>> 打印 wrt/bin/targets 下所有文件："
+          if [ -d wrt/bin/targets ]; then
+            find wrt/bin/targets -type f | sed 's/^/  - /'
+          else
+            echo "❗ wrt/bin/targets 目录不存在"
+          fi
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.project }}-output
           path: |
-            wrt/bin/targets/**/*.{img,bin,tar.gz,zip}
+            wrt/bin/targets/**/*.img
+            wrt/bin/targets/**/*.bin
+            wrt/bin/targets/**/*.tar.gz
+            wrt/bin/targets/**/*.zip
+          if-no-files-found: warning
 
       - name: Upload build log
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.project }}-build-log
-          path: wrt/build.log
+          path: wrt/world_debug.log

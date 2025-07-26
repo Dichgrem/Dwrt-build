@@ -51,6 +51,24 @@ jobs:
       - name: Checkout current repository
         uses: actions/checkout@v4
 
+      - name: Free up disk space
+        run: |
+          echo "🧹 开始清理无用文件，释放磁盘空间"
+          # 删除预装但编译中不需要的 SDK/工具
+          sudo rm -rf /usr/share/dotnet \
+                      /usr/local/lib/android \
+                      /opt/ghc \
+                      /opt/hostedtoolcache \
+                      /opt/az \
+                      /opt/microsoft
+          # 删除 GitHub Actions self-hosted runner 缓存目录（如果存在）
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          # 删除系统缓存和日志
+          sudo rm -rf /var/cache/apt/archives/* /var/lib/apt/lists/* /var/log/*.log
+          # 显示当前磁盘使用情况
+          echo "📊 磁盘使用情况："
+          df -h || true
+
       - name: Determine Git ref
         id: refinfo
         run: |
@@ -108,15 +126,11 @@ jobs:
           echo "🔖 切换到版本：${{ steps.refinfo.outputs.ref }}"
           git checkout "${{ steps.refinfo.outputs.ref }}"
 
-      - name: Copy diy.sh
+      - name: Copy and Run diy.sh
         run: |
-          echo "📂 复制 diy.sh 到 wrt 目录"
+          echo "📂 复制 diy.sh 到 wrt 目录并执行"
           cp diy.sh wrt/diy.sh
-
-      - name: Run diy.sh
-        working-directory: wrt
-        run: |
-          echo "🔧 执行 diy.sh"
+          cd wrt
           chmod +x diy.sh
           ./diy.sh
 
@@ -135,37 +149,31 @@ jobs:
             echo "❌ 找不到配置文件：${{ inputs.config_path }}"
             exit 1
           fi
+
           cp "${{ inputs.config_path }}" wrt/.config
 
-          # 校验 .config 是否与原始配置完全相同
-          if cmp -s "${{ inputs.config_path }}" wrt/.config; then
-            echo "✅ .config 与 ${{ inputs.config_path }} 完全一致"
-          else
-            echo "❌ .config 与 ${{ inputs.config_path }} 不一致，输出差异："
-            diff -u "${{ inputs.config_path }}" wrt/.config || true
-            exit 1
-          fi
-
           cd wrt
+
+          echo "📑 备份配置文件以供对比"
+          cp .config .config.before_oldconfig
+
           echo "🔄 运行 make oldconfig"
           make oldconfig
+
+          echo "🔍 对比 make oldconfig 前后的 .config 差异"
+          if cmp -s .config.before_oldconfig .config; then
+            echo "✅ .config 在 make oldconfig 后未发生变化"
+          else
+            echo "⚠️ .config 在 make oldconfig 后发生变化，差异如下："
+            diff -u .config.before_oldconfig .config || true
+          fi
 
       - name: Download source packages
         working-directory: wrt
         run: |
-          echo "⬇️ 下载所有源码包"
-
-          if [ "${{ inputs.threads }}" = "0" ] || [ -z "${{ inputs.threads }}" ]; then
-            JOBS=$(nproc)
-          else
-            JOBS=${{ inputs.threads }}
-          fi
-
+          echo "⬇️ 下载所有源码包（使用单线程 -j1 避免卡住）"
           set -o pipefail
-          if ! make download -j${JOBS}; then
-            echo "⚠️ 多线程下载失败，尝试单线程下载..."
-            make download -j1
-          fi
+          time make download -j1
 
       - name: Build Firmware
         working-directory: wrt
@@ -208,16 +216,16 @@ jobs:
             echo "❗ wrt/bin/targets 目录不存在"
           fi
 
-      - name: Upload firmware artifacts
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.project }}-output
           path: |
-            wrt/bin/targets/**/*.img
-            wrt/bin/targets/**/*.bin
-            wrt/bin/targets/**/*.tar.gz
-            wrt/bin/targets/**/*.zip
-          if-no-files-found: warning
+            wrt/bin/targets/**
+            !wrt/bin/targets/x86/64/packages/**
+          if-no-files-found: warn
+          compression-level: 6
+          overwrite: false
 
       - name: Upload build log
         uses: actions/upload-artifact@v4

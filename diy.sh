@@ -15,10 +15,10 @@ echo "🚀 添加自定义 feed 源..."
 echo "✅ feeds 添加完成"
 
 # 1. 默认 hostname
-sed -i 's/=ImmortalWrt/=Dwrt/' package/base-files/files/bin/config_generate
+sed -i "s/ImmortalWrt/Dwrt/g" package/base-files/files/bin/config_generate
 
 # 2. 默认 IP 地址
-sed -i 's/192.168.1.1/192.168.1.1/' package/base-files/files/bin/config_generate
+sed -i 's/192.168.2.1/192.168.1.1/' package/base-files/files/bin/config_generate
 
 # 3. 默认 root 密码
 HASH=$(openssl passwd -1 'password')
@@ -60,12 +60,12 @@ EOF
 fi
 
 # 8. 自定义 LuCI 概览设备型号
-cat >package/base-files/files/etc/uci-defaults/99-model-fix <<'EOF'
+#cat >package/base-files/files/etc/uci-defaults/99-model-fix <<'EOF'
 #!/bin/sh
-mkdir -p /tmp/sysinfo
-echo "Myrouter" > /tmp/sysinfo/model
-exit 0
-EOF
-chmod +x package/base-files/files/etc/uci-defaults/99-model-fix
+#mkdir -p /tmp/sysinfo
+#echo "Myrouter" > /tmp/sysinfo/model
+#exit 0
+#EOF
+#chmod +x package/base-files/files/etc/uci-defaults/99-model-fix
 
 echo "✅ diy.sh 执行完毕"

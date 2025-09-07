@@ -54,17 +54,13 @@ jobs:
       - name: Free up disk space
         run: |
           echo "🧹 开始清理无用文件，释放磁盘空间"
-          # 删除预装但编译中不需要的 SDK/工具
           sudo rm -rf /usr/share/dotnet \
-                      /usr/local/lib/android \
-                      /opt/ghc \
-                      /opt/hostedtoolcache \
-                      /opt/az \
-                      /opt/microsoft
-          # 删除 GitHub Actions self-hosted runner 缓存目录（如果存在）
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          # 删除系统缓存和日志
-          sudo rm -rf /var/cache/apt/archives/* /var/lib/apt/lists/* /var/log/*.log
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/az \
+            /opt/microsoft
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
           # 显示当前磁盘使用情况
           echo "📊 磁盘使用情况："
           df -h || true

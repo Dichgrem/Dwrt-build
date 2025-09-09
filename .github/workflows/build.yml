@@ -9,11 +9,10 @@ on:
         default: "immortalwrt"
         type: choice
         options:
+          - lede
           - openwrt
           - immortalwrt
-          - x-wrt
-          - lienol
-          - lede
+          - immortalwrt-mt798x
       version_type:
         description: "版本类型"
         required: true
@@ -96,14 +95,11 @@ jobs:
             immortalwrt)
               echo "url=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_OUTPUT
               ;;
-            x-wrt)
-              echo "url=https://github.com/x-wrt/x-wrt.git" >> $GITHUB_OUTPUT
+            immortalwrt-mt798x)
+              echo "url=https://github.com/hanwckf/immortalwrt-mt798x.git" >> $GITHUB_OUTPUT
               ;;
             openwrt)
               echo "url=https://git.openwrt.org/openwrt/openwrt.git" >> $GITHUB_OUTPUT
-              ;;
-            lienol)
-              echo "url=https://github.com/Lienol/openwrt.git" >> $GITHUB_OUTPUT
               ;;
             lede)
               echo "url=https://github.com/coolsnowwolf/lede.git" >> $GITHUB_OUTPUT

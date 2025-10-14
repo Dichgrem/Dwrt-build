@@ -10,4 +10,5 @@ This is a Openwrt build workflows.
 | openwrt      | https://git.openwrt.org/openwrt/openwrt.git                | openwrt/openwrt          |
 | immortalwrt  | https://github.com/immortalwrt/immortalwrt.git             | immortalwrt/immortalwrt  |
 | immortalwrt-mt798x         | https://github.com/hanwckf/immortalwrt-mt798x.git                   |  hanwckf/immortalwrt-mt798x         |
+| immortalwrt-mt798x-6.6         | https://github.com/padavanonly/immortalwrt-mt798x-6.6.git                   |  padavanonly/immortalwrt-mt798x-6.6         |
 

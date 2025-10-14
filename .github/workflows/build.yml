@@ -1,4 +1,4 @@
-name: Build Custom WRT
+name: Build WRT
 
 on:
   workflow_dispatch:
@@ -14,6 +14,11 @@ on:
           - immortalwrt
           - immortalwrt-mt798x
           - immortalwrt-mt798x-6.6
+      tag:
+        description: "版本号"
+        required: false
+        default: "v24.10.3"
+        type: string
       version_type:
         description: "版本类型"
         required: true
@@ -22,23 +27,13 @@ on:
         options:
           - "snapshot"
           - "stable"
-      branch:
-        description: "snapshot-branch"
-        required: false
-        default: "master"
-        type: string
-      tag:
-        description: "stable-tag"
-        required: false
-        default: "v24.10.2"
-        type: string
       config_path:
-        description: "config 路径"
+        description: "配置文件路径"
         required: true
         default: "config/myconfig"
         type: string
       threads:
-        description: "编译线程数（留空或填写 0 则自动使用 nproc）"
+        description: "编译线程数（填写 0 则使用 nproc）"
         required: false
         default: "0"
         type: string
@@ -61,18 +56,20 @@ jobs:
             /opt/microsoft
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
-          # 显示当前磁盘使用情况
           echo "📊 磁盘使用情况："
           df -h || true
 
-      - name: Determine Git ref
+      - name: Choose Wrt Version
         id: refinfo
         run: |
-          if [ "${{ inputs.version_type }}" = "snapshot" ]; then
-            echo "ref=${{ inputs.branch }}" >> $GITHUB_OUTPUT
+          if [ "$VERSION_TYPE" = "snapshot" ]; then
+            echo "ref=master" >> "$GITHUB_OUTPUT"
           else
-            echo "ref=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "ref=$TAG" >> "$GITHUB_OUTPUT"
           fi
+        env:
+          VERSION_TYPE: ${{ inputs.version_type }}
+          TAG: ${{ inputs.tag }}
 
       - name: Install dependencies
         run: |
@@ -114,7 +111,7 @@ jobs:
               ;;
           esac
 
-      - name: Clone repository
+      - name: Clone Wrt source
         run: |
           echo "📥 克隆 ${{ inputs.project }} 仓库"
           git clone "${{ steps.projectinfo.outputs.url }}" wrt
@@ -164,7 +161,7 @@ jobs:
             diff -u .config.before_oldconfig .config || true
           fi
 
-      - name: Download source packages
+      - name: Download packages
         working-directory: wrt
         run: |
           echo "⬇️ 下载所有源码包（使用单线程 -j1 避免卡住）"

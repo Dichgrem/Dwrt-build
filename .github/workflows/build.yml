@@ -32,6 +32,21 @@ on:
         required: true
         default: "config/myconfig"
         type: string
+      proxy_nikki:
+        description: "启用Nikki"
+        required: false
+        default: false
+        type: boolean
+      proxy_passwall2:
+        description: "启用Passwall2"
+        required: false
+        default: false
+        type: boolean
+      proxy_luci_app_momo:
+        description: "启用luci-app-momo"
+        required: false
+        default: false
+        type: boolean
       threads:
         description: "编译线程数（填写 0 则使用 nproc）"
         required: false
@@ -130,6 +145,21 @@ jobs:
       - name: Update and install feeds
         working-directory: wrt
         run: |
+          if [ "${{ github.event.inputs.proxy_nikki }}" == "true" ]; then
+            echo "📦 添加 nikki feed"
+            echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main" >> "feeds.conf.default"
+          fi
+
+          if [ "${{ github.event.inputs.proxy_passwall2 }}" == "true" ]; then
+            echo "📦 添加 passwall2 feed"
+            echo "src-git passwall https://github.com/xiaorouji/openwrt-passwall2.git" >> "feeds.conf.default"
+          fi
+
+          if [ "${{ github.event.inputs.proxy_luci_app_momo }}" == "true" ]; then
+            echo "📦 添加 luci-app-momo feed"
+            echo "src-git momo https://github.com/nikkinikki-org/OpenWrt-momo.git;main" >> "feeds.conf.default"
+          fi
+
           echo "📦 更新 feeds"
           ./scripts/feeds update -a
           echo "📦 安装 feeds"

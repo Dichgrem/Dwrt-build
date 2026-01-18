@@ -9,7 +9,6 @@ on:
         default: "immortalwrt"
         type: choice
         options:
-          - lede
           - openwrt
           - immortalwrt
           - immortalwrt-mt798x
@@ -28,17 +27,17 @@ on:
           - "snapshot"
           - "stable"
       config_path:
-        description: "配置文件路径"
-        required: true
-        default: "config/myconfig"
+        description: "配置文件路径（留空则跳过）"
+        required: false
+        default: "config/x86_64_config"
         type: string
-      proxy_nikki:
-        description: "启用Nikki"
+      proxy_passwall2:
+        description: "启用Passwall2"
         required: false
         default: false
         type: boolean
-      proxy_passwall2:
-        description: "启用Passwall2"
+      proxy_luci_app_zzz:
+        description: "启用luci-app-zzz"
         required: false
         default: false
         type: boolean
@@ -52,135 +51,275 @@ on:
         required: false
         default: "0"
         type: string
+      cache_enabled:
+        description: "启用缓存加速编译"
+        required: false
+        default: true
+        type: boolean
+      enable_bbr:
+        description: "启用 BBR 拥塞控制"
+        required: false
+        default: true
+        type: boolean
+      custom_shell:
+        description: "默认 shell"
+        required: false
+        default: "bash"
+        type: choice
+        options:
+          - ash
+          - bash
+      luci_theme:
+        description: "LuCI 主题"
+        required: false
+        default: "argon"
+        type: choice
+        options:
+          - argon
+          - bootstrap
+          - material
+      custom_hostname:
+        description: "自定义 hostname（留空则跳过）"
+        required: false
+        default: "Dwrt"
+        type: string
+      custom_ip:
+        description: "自定义 IP 地址（留空则跳过）"
+        required: false
+        default: "192.168.1.1"
+        type: string
+      root_password:
+        description: "自定义 root 密码（留空则跳过）"
+        required: false
+        default: ""
+        type: string
+      custom_banner:
+        description: "自定义 SSH 横幅（留空则默认）"
+        required: false
+        default: ""
+        type: string
+
+env:
+  CCACHE_DIR: ${{ github.workspace }}/wrt/.ccache
+  DL_DIR: ${{ github.workspace }}/wrt/dl
 
 jobs:
-  build:
+  validate:
+    name: 验证输入参数
     runs-on: ubuntu-latest
+    outputs:
+      is_valid: ${{ steps.validate.outputs.is_valid }}
+      config_exists: ${{ steps.validate.outputs.config_exists }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate inputs
+        id: validate
+        run: |
+          echo "🔍 验证输入参数..."
+
+          # 验证 threads 参数
+          if [ -n "${{ inputs.threads }}" ]; then
+            if ! [[ "${{ inputs.threads }}" =~ ^[0-9]+$ ]]; then
+              echo "❌ threads 参数必须是数字"
+              echo "is_valid=false" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+          fi
+
+          # 验证配置文件是否存在（如果提供了路径）
+          if [ -n "${{ inputs.config_path }}" ]; then
+            if [ -f "${{ inputs.config_path }}" ]; then
+              echo "config_exists=true" >> "$GITHUB_OUTPUT"
+              echo "✅ 配置文件存在：${{ inputs.config_path }}"
+            else
+              echo "config_exists=false" >> "$GITHUB_OUTPUT"
+              echo "⚠️  配置文件不存在：${{ inputs.config_path }}，将跳过配置文件"
+            fi
+          else
+            echo "config_exists=false" >> "$GITHUB_OUTPUT"
+            echo "ℹ️  未提供配置文件路径，将使用默认配置"
+          fi
+
+          echo "is_valid=true" >> "$GITHUB_OUTPUT"
+          echo "✅ 所有输入参数验证通过"
+
+  build:
+    name: 编译固件
+    runs-on: ubuntu-latest
+    needs: validate
+    timeout-minutes: 360
 
     steps:
       - name: Checkout current repository
         uses: actions/checkout@v4
 
-      - name: Free up disk space
-        run: |
-          echo "🧹 开始清理无用文件，释放磁盘空间"
-          sudo rm -rf /usr/share/dotnet \
-            /usr/local/lib/android \
-            /opt/ghc \
-            /opt/az \
-            /opt/microsoft
-          sudo apt-get clean
-          sudo rm -rf /var/lib/apt/lists/*
-          echo "📊 磁盘使用情况："
-          df -h || true
-
-      - name: Choose Wrt Version
-        id: refinfo
-        run: |
-          if [ "$VERSION_TYPE" = "snapshot" ]; then
-            echo "ref=master" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=$TAG" >> "$GITHUB_OUTPUT"
-          fi
-        env:
-          VERSION_TYPE: ${{ inputs.version_type }}
-          TAG: ${{ inputs.tag }}
-
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/{ghc,az,microsoft}
+          sudo apt-get update && sudo apt-get install -y \
             build-essential clang flex bison g++ gawk gettext git \
-            libncurses-dev libssl-dev python3 python3-dev python3-setuptools \
+            libncurses-dev libssl-dev python3{,-dev,-setuptools} \
             rsync unzip zlib1g-dev file wget curl \
-            gzip tar zip xz-utils bzip2 zstd \
-            make cmake autoconf automake libtool patch diffutils \
+            {gzip,tar,zip,xz-utils,bzip2,zstd} \
+            make cmake {autoconf,automake,libtool,patch,diffutils} \
             findutils grep sed help2man texinfo \
             libelf-dev libfuse-dev liblzma-dev libxml2-dev libyaml-dev \
             uuid-dev device-tree-compiler antlr3 gperf \
             time bc jq xxd swig upx-ucl ccache ecj fastjar imagemagick \
-            llvm linux-tools-common libbpf-dev linux-tools-$(uname -r)
+            llvm linux-tools-common libbpf-dev linux-tools-$(uname -r) \
+            u-boot-tools device-tree-compiler
 
       - name: Determine Git URL
         id: projectinfo
         run: |
           case "${{ inputs.project }}" in
-            immortalwrt)
-              echo "url=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_OUTPUT
-              ;;
-            immortalwrt-mt798x)
-              echo "url=https://github.com/hanwckf/immortalwrt-mt798x.git" >> $GITHUB_OUTPUT
-              ;;
-            immortalwrt-mt798x-6.6)
-              echo "url=https://github.com/padavanonly/immortalwrt-mt798x-6.6.git" >> $GITHUB_OUTPUT
-              ;;
-            openwrt)
-              echo "url=https://git.openwrt.org/openwrt/openwrt.git" >> $GITHUB_OUTPUT
-              ;;
-            lede)
-              echo "url=https://github.com/coolsnowwolf/lede.git" >> $GITHUB_OUTPUT
-              ;;
-            *)
-              echo "❌ 未知项目: ${{ inputs.project }}" >&2
-              exit 1
-              ;;
+            immortalwrt)       echo "url=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_OUTPUT ;;
+            immortalwrt-mt798x) echo "url=https://github.com/hanwckf/immortalwrt-mt798x.git" >> $GITHUB_OUTPUT ;;
+            immortalwrt-mt798x-6.6) echo "url=https://github.com/padavanonly/immortalwrt-mt798x-6.6.git" >> $GITHUB_OUTPUT ;;
+            openwrt)          echo "url=https://git.openwrt.org/openwrt/openwrt.git" >> $GITHUB_OUTPUT ;;
+            *)                 echo "❌ 未知项目" >&2; exit 1 ;;
           esac
 
       - name: Clone Wrt source
         run: |
-          echo "📥 克隆 ${{ inputs.project }} 仓库"
-          git clone "${{ steps.projectinfo.outputs.url }}" wrt
-          cd wrt
-          echo "🔖 切换到版本：${{ steps.refinfo.outputs.ref }}"
-          git checkout "${{ steps.refinfo.outputs.ref }}"
+          echo "📥 克隆 ${{ inputs.project }} (${{ inputs.version_type }})"
 
-      - name: Copy and Run diy.sh
+          [ "${{ inputs.version_type }}" = "snapshot" ] && BRANCH_MODE=1 || BRANCH_MODE=0
+
+          if [ $BRANCH_MODE -eq 1 ]; then
+            git clone --depth 1 "${{ steps.projectinfo.outputs.url }}" wrt
+            cd wrt
+            DEFAULT_BRANCH=$(git remote show origin | grep 'HEAD branch' | awk '{print $NF}')
+            [ -z "$DEFAULT_BRANCH" ] && for b in main master openwrt-24.10; do
+              git ls-remote --heads origin "$b" | grep -q "$b" && DEFAULT_BRANCH=$b && break
+            done
+            [ -z "$DEFAULT_BRANCH" ] && { echo "❌ 无法确定默认分支"; exit 1; }
+            git fetch origin "${DEFAULT_BRANCH}" 2>/dev/null
+            git switch "${DEFAULT_BRANCH}" 2>/dev/null || git checkout "${DEFAULT_BRANCH}"
+          else
+            git clone "${{ steps.projectinfo.outputs.url }}" wrt
+            cd wrt
+            git checkout "${{ inputs.tag }}" 2>/dev/null || \
+            (git fetch --tags && git checkout "${{ inputs.tag }}") || \
+            { echo "❌ 标签不存在"; exit 1; }
+          fi
+
+          echo "🔖 $(git describe --tags --always 2>/dev/null || git rev-parse --short HEAD)"
+          echo "🌿 $(git branch --show-current 2>/dev/null || echo 'detached')"
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        if: inputs.cache_enabled == true
+        with:
+          key: ${{ runner.os }}-wrt-ccache-${{ inputs.project }}-${{ inputs.version_type }}
+          max-size: 2G
+          update-package-index: true
+
+      - name: Cache downloads
+        uses: actions/cache@v4
+        if: inputs.cache_enabled == true
+        with:
+          path: wrt/dl
+          key: ${{ runner.os }}-wrt-dl-${{ inputs.project }}-${{ inputs.version_type }}
+
+      - name: Cache build directory
+        uses: actions/cache@v4
+        if: inputs.cache_enabled == true
+        with:
+          path: wrt/build_dir
+          key: ${{ runner.os }}-wrt-build-${{ inputs.project }}-${{ inputs.version_type }}
+
+      - name: Apply custom configurations
+        working-directory: wrt
         run: |
-          echo "📂 复制 diy.sh 到 wrt 目录并执行"
-          cp diy.sh wrt/diy.sh
-          cd wrt
-          chmod +x diy.sh
-          ./diy.sh
+          TARGET_TYPE=$(grep -qi immortalwrt package/base-files/files/etc/openwrt_release 2>/dev/null && echo ImmortalWrt || \
+                       [ -d feeds/packages ] && echo ImmortalWrt || echo OpenWrt)
+          CONFIG_GEN=package/base-files/files/bin/config_generate
+
+          [ -n "${{ inputs.custom_hostname }}" ] && [ -f "$CONFIG_GEN" ] && \
+            sed -i "s/${TARGET_TYPE}/${{ inputs.custom_hostname }}/g" "$CONFIG_GEN" && echo "✅ Hostname: ${{ inputs.custom_hostname }}"
+
+          [ -n "${{ inputs.custom_ip }}" ] && [ -f "$CONFIG_GEN" ] && \
+            sed -i 's/192\.168\.[0-9]*\.[0-9]*/${{ inputs.custom_ip }}/g' "$CONFIG_GEN" && echo "✅ IP: ${{ inputs.custom_ip }}"
+
+          [ -n "${{ inputs.root_password }}" ] && [ -f package/base-files/files/etc/shadow ] && {
+            HASH=$(openssl passwd -1 '${{ inputs.root_password }}')
+            sed -i "s|^root:[^:]*:|root:${HASH}:|" package/base-files/files/etc/shadow
+            echo "✅ Root 密码已设置"
+          }
+
+          mkdir -p package/base-files/files/etc/uci-defaults
+          cat >package/base-files/files/etc/uci-defaults/99_set_theme <<'EOF'
+          uci set luci.main.mediaurlbase=/luci-static/${{ inputs.luci_theme }}; uci commit luci
+          EOF
+          chmod +x package/base-files/files/etc/uci-defaults/99_set_theme
+
+          if [ "${{ inputs.enable_bbr }}" = "true" ]; then
+            mkdir -p package/base-files/files/etc/sysctl.d
+            echo -e 'net.core.default_qdisc=fq_codel\nnet.ipv4.tcp_congestion_control=bbr' \
+              > package/base-files/files/etc/sysctl.d/99-bbr.conf && echo "✅ BBR 已启用"
+          else
+            rm -f package/base-files/files/etc/sysctl.d/99-bbr.conf && echo "ℹ️  BBR 已禁用"
+          fi
+
+          PASSWD=package/base-files/files/etc/passwd
+          if [ -f "$PASSWD" ]; then
+            [ "${{ inputs.custom_shell }}" = "bash" ] && sed -i 's|/bin/ash|/bin/bash|g' "$PASSWD" || \
+              sed -i 's|/bin/bash|/bin/ash|g' "$PASSWD"
+            echo "✅ Shell: ${{ inputs.custom_shell }}"
+          fi
+
+          mkdir -p package/base-files/files/etc
+          if [ -n "${{ inputs.custom_banner }}" ]; then
+            echo "${{ inputs.custom_banner }}" > package/base-files/files/etc/banner
+          else
+            cat >package/base-files/files/etc/banner <<'EOF'
+          |   | _____   _____   ____________/  |______  |  |
+          |   |/     \ /     \ /  _ \_  __ \   __\__  \ |  |
+          |   |  Y Y  \  Y Y  (  <_> )  | \/|  |  / __ \|  |__
+          |___|__|_|  /__|_|  /\____/|__|   |__| (____  /____/
+                  \/      \/             By Dich    \/
+          -----------------------------------------------------
+          EOF
+          fi && echo "✅ Banner 已设置"
 
       - name: Update and install feeds
         working-directory: wrt
         run: |
-          if [ "${{ github.event.inputs.proxy_nikki }}" == "true" ]; then
-            echo "📦 添加 nikki feed"
-            echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main" >> "feeds.conf.default"
+          if [ "${{ inputs.proxy_luci_app_zzz }}" = "true" ]; then
+            echo "src-git luci-app-zzz https://github.com/Dichgrem/luci-app-zzz.git" >> feeds.conf.default
           fi
-
-          if [ "${{ github.event.inputs.proxy_passwall2 }}" == "true" ]; then
-            echo "📦 添加 passwall2 feed"
-            echo "src-git passwall https://github.com/xiaorouji/openwrt-passwall2.git" >> "feeds.conf.default"
+          if [ "${{ inputs.proxy_passwall2 }}" = "true" ]; then
+            echo "src-git passwall https://github.com/xiaorouji/openwrt-passwall2.git" >> feeds.conf.default
           fi
-
-          if [ "${{ github.event.inputs.proxy_luci_app_momo }}" == "true" ]; then
-            echo "📦 添加 luci-app-momo feed"
-            echo "src-git momo https://github.com/nikkinikki-org/OpenWrt-momo.git;main" >> "feeds.conf.default"
+          if [ "${{ inputs.proxy_luci_app_momo }}" = "true" ]; then
+            echo "src-git momo https://github.com/nikkinikki-org/OpenWrt-momo.git" >> feeds.conf.default
           fi
+          ./scripts/feeds update -a && ./scripts/feeds install -a
 
-          echo "📦 更新 feeds"
-          ./scripts/feeds update -a
-          echo "📦 安装 feeds"
-          ./scripts/feeds install -a
 
       - name: Setup configuration
+        working-directory: wrt
         run: |
-          echo "📋 复制配置：${{ inputs.config_path }} → wrt/.config"
-          if [ ! -f "${{ inputs.config_path }}" ]; then
-            echo "❌ 找不到配置文件：${{ inputs.config_path }}"
-            exit 1
+          # 复制配置文件（如果提供）
+          if [ -n "${{ inputs.config_path }}" ] && [ -f "${{ inputs.config_path }}" ]; then
+            echo "📋 复制配置：${{ inputs.config_path }} → .config"
+            cp "${{ inputs.config_path }}" .config
+          else
+            echo "ℹ️  未提供配置文件，使用默认配置"
+            # 生成默认配置
+            make defconfig || true
           fi
 
-          cp "${{ inputs.config_path }}" wrt/.config
-
-          cd wrt
-
-          echo "📑 备份配置文件以供对比"
+          # 备份配置文件以供对比
           cp .config .config.before_oldconfig
 
-          echo "🔄 运行 make oldconfig"
+          echo "🔄 运行 defconfig"
+          make defconfig
+
+          echo "🔄 运行 oldconfig"
           make oldconfig
 
           echo "🔍 对比 make oldconfig 前后的 .config 差异"
@@ -196,9 +335,14 @@ jobs:
         run: |
           echo "⬇️ 下载所有源码包（使用单线程 -j1 避免卡住）"
           set -o pipefail
+          START=$(date +%s)
           time make download -j1
+          END=$(date +%s)
+          DURATION=$((END - START))
+          echo "✅ 下载完成，耗时：${DURATION}秒"
 
       - name: Build Firmware
+        id: build
         working-directory: wrt
         run: |
           if [ "${{ inputs.threads }}" = "0" ] || [ -z "${{ inputs.threads }}" ]; then
@@ -209,7 +353,9 @@ jobs:
 
           echo "🚀 全量编译（并行 ${JOBS}）开始"
           START=$(date "+%Y-%m-%d %H:%M:%S")
+          START_TS=$(date +%s)
           echo "⏱️ 编译开始：${START}"
+          echo "jobs_count=${JOBS}" >> "$GITHUB_OUTPUT"
 
           set -o pipefail
 
@@ -227,31 +373,86 @@ jobs:
           fi
 
           END=$(date "+%Y-%m-%d %H:%M:%S")
+          END_TS=$(date +%s)
+          DURATION=$((END_TS - START_TS))
+          DURATION_H=$((DURATION / 3600))
+          DURATION_M=$(((DURATION % 3600) / 60))
+          DURATION_S=$((DURATION % 60))
+          
           echo "✅ 编译成功"
           echo "⏱️ 编译结束：${END}"
+          echo "⏱️ 总耗时：${DURATION_H}小时 ${DURATION_M}分钟 ${DURATION_S}秒"
+          echo "build_success=true" >> "$GITHUB_OUTPUT"
 
-      - name: list all target files
+      - name: Build statistics
+        if: steps.build.outputs.build_success == 'true'
+        working-directory: wrt
         run: |
-          echo ">>> 打印 wrt/bin/targets 下所有文件："
-          if [ -d wrt/bin/targets ]; then
-            find wrt/bin/targets -type f | sed 's/^/  - /'
+          echo "📊 编译统计信息："
+          echo "项目：${{ inputs.project }}"
+          echo "版本类型：${{ inputs.version_type }}"
+
+          if [ "${{ inputs.version_type }}" = "snapshot" ]; then
+            VERSION_INFO=$(git describe --tags --always 2>/dev/null || echo "latest")
+            BRANCH_INFO=$(git branch --show-current 2>/dev/null || echo "unknown")
+            echo "版本：${VERSION_INFO} (${BRANCH_INFO}分支)"
           else
-            echo "❗ wrt/bin/targets 目录不存在"
+            echo "版本：${{ inputs.tag }} (稳定版)"
           fi
+
+          echo "编译线程：${{ steps.build.outputs.jobs_count }}"
+          echo "缓存状态：${{ inputs.cache_enabled }}"
+          echo ""
+          echo "固件文件列表："
+          if [ -d bin/targets ]; then
+            find bin/targets -type f -exec ls -lh {} \; | awk '{print $9, $5}'
+            echo ""
+            echo "总固件大小："
+            du -sh bin/targets
+          fi
+
+      - name: Upload build log on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ${{ inputs.project }}-build-log-error
+          path: wrt/world_debug.log
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
+        if: steps.build.outputs.build_success == 'true'
         with:
-          name: ${{ inputs.project }}-output
+          name: ${{ inputs.project }}-output-${{ inputs.version_type }}-${{ github.run_number }}
           path: |
             wrt/bin/targets/**
             !wrt/bin/targets/x86/64/packages/**
+            !wrt/bin/targets/**/packages/**
           if-no-files-found: warn
           compression-level: 6
           overwrite: false
+          retention-days: 30
 
-      - name: Upload build log
+      - name: Upload config diff
         uses: actions/upload-artifact@v4
+        if: steps.build.outputs.build_success == 'true'
         with:
-          name: ${{ inputs.project }}-build-log
-          path: wrt/world_debug.log
+          name: ${{ inputs.project }}-config-diff
+          path: |
+            wrt/.config
+            wrt/.config.before_oldconfig
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "🧹 清理工作空间..."
+          if [ -d "wrt" ]; then
+            cd wrt
+            make clean || true
+            echo "✅ 清理完成"
+          else
+            echo "ℹ️  wrt 目录不存在，跳过清理"
+          fi

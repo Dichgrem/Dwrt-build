@@ -1,0 +1,242 @@
+name: Manual Build
+on:
+  workflow_dispatch:
+    inputs:
+      project:
+        description: "Project"
+        required: true
+        type: choice
+        options: [openwrt, immortalwrt, immortalwrt-mt798x, immortalwrt-mt798x-6.6]
+      version_type:
+        description: "Version type"
+        required: true
+        type: choice
+        options: [snapshot, stable]
+      tag:
+        description: "Tag / branch (stable only; leave empty to use latest stable)"
+        required: false
+        type: string
+      config_path:
+        description: "Config file path"
+        required: false
+        type: string
+        default: config/x86_64_config
+      custom_feeds:
+        description: "Extra feeds: src-git name url;"
+        required: false
+        type: string
+        default: ""
+      threads:
+        description: "Build threads (0 = auto)"
+        required: false
+        type: string
+        default: "0"
+      hostname:
+        description: "Custom hostname"
+        required: false
+        type: string
+        default: ""
+      ip_addr:
+        description: "Custom LAN IP address"
+        required: false
+        type: string
+        default: ""
+      root_password:
+        description: "Root password"
+        required: false
+        type: string
+        default: ""
+      shell:
+        description: "Default shell"
+        required: false
+        type: choice
+        options: [ash, bash]
+        default: ash
+      force_rebuild:
+        description: "Force rebuild (skip cache restore)"
+        required: false
+        type: boolean
+        default: false
+      publish_release:
+        description: "Publish draft release"
+        required: false
+        type: boolean
+        default: false
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  PROJECTS: >-
+    {
+      "openwrt":               {"url":"https://git.openwrt.org/openwrt/openwrt.git",              "release_src":"openwrt_downloads"},
+      "immortalwrt":           {"url":"https://github.com/immortalwrt/immortalwrt.git",           "release_src":"immortalwrt/immortalwrt"},
+      "immortalwrt-mt798x":    {"url":"https://github.com/hanwckf/immortalwrt-mt798x.git",        "release_src":"hanwckf/immortalwrt-mt798x"},
+      "immortalwrt-mt798x-6.6":{"url":"https://github.com/padavanonly/immortalwrt-mt798x-6.6.git","release_src":"padavanonly/immortalwrt-mt798x-6.6"}
+    }
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/{ghc,az,microsoft}
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gettext \
+            git libncurses-dev libssl-dev python3 python3-dev python3-setuptools \
+            rsync unzip zlib1g-dev file wget curl gzip tar zip xz-utils bzip2 zstd \
+            make cmake autoconf automake libtool patch diffutils findutils grep sed \
+            help2man texinfo libelf-dev libfuse-dev liblzma-dev libxml2-dev \
+            libyaml-dev uuid-dev device-tree-compiler antlr3 gperf time bc jq \
+            xxd swig upx-ucl ccache ecj fastjar imagemagick llvm libbpf-dev u-boot-tools
+
+      # ── Resolve clone URL and stable tag ──────────────────────────────────
+      - name: Resolve project metadata
+        id: meta
+        run: |
+          URL=$(echo '${{ env.PROJECTS }}' | jq -r '."${{ inputs.project }}".url')
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+          if [ "${{ inputs.version_type }}" = "stable" ]; then
+            if [ -n "${{ inputs.tag }}" ]; then
+              # User supplied an explicit tag — use it directly
+              echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            else
+              # Fetch latest stable tag from the appropriate source
+              SRC=$(echo '${{ env.PROJECTS }}' | jq -r '."${{ inputs.project }}".release_src')
+              if [ "$SRC" = "openwrt_downloads" ]; then
+                VER=$(curl -fsL "https://downloads.openwrt.org/.versions.json" | jq -r '.stable_version')
+                echo "tag=v${VER}" >> "$GITHUB_OUTPUT"
+              else
+                TAG=$(curl -fsL "https://api.github.com/repos/${SRC}/releases/latest" | jq -r '.tag_name')
+                echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+              fi
+            fi
+          else
+            echo "tag=snapshot" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Clone ─────────────────────────────────────────────────────────────
+      - name: Clone & checkout
+        run: |
+          if [ "${{ inputs.version_type }}" = "snapshot" ]; then
+            git clone --depth 1 "${{ steps.meta.outputs.url }}" wrt
+          else
+            git clone "${{ steps.meta.outputs.url }}" wrt
+            cd wrt && git fetch --tags
+            git checkout "${{ steps.meta.outputs.tag }}" \
+              || { echo "❌ Tag/branch '${{ steps.meta.outputs.tag }}' not found"; exit 1; }
+          fi
+          echo "📌 $(git -C wrt describe --tags --always)"
+
+      # ── Build acceleration ────────────────────────────────────────────────
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-${{ inputs.project }}-${{ inputs.version_type }}-${{ github.run_number }}
+          # When force_rebuild=true, restore-keys is blank → no cache restored
+          restore-keys: >-
+            ${{ inputs.force_rebuild == 'false' &&
+                format('{0}-{1}-{2}-', runner.os, inputs.project, inputs.version_type)
+                || '' }}
+          max-size: 2G
+
+      - name: Cache downloads
+        uses: actions/cache@v4
+        if: inputs.force_rebuild == false
+        with:
+          path: wrt/dl
+          key: ${{ runner.os }}-dl-${{ inputs.project }}-${{ inputs.version_type }}-${{ steps.meta.outputs.tag }}
+          restore-keys: ${{ runner.os }}-dl-${{ inputs.project }}-${{ inputs.version_type }}-
+
+      # ── Customisation ─────────────────────────────────────────────────────
+      - name: Apply custom system configs
+        working-directory: wrt
+        run: |
+          CFG=package/base-files/files/bin/config_generate
+          SHADOW=package/base-files/files/etc/shadow
+          PASSWD=package/base-files/files/etc/passwd
+
+          # hostname (covers OpenWrt and ImmortalWrt defaults)
+          if [ -n "${{ inputs.hostname }}" ] && [ -f "$CFG" ]; then
+            sed -i -E "s/(OpenWrt|ImmortalWrt)/${{ inputs.hostname }}/g" "$CFG"
+          fi
+
+          # LAN IP
+          if [ -n "${{ inputs.ip_addr }}" ] && [ -f "$CFG" ]; then
+            sed -i -E "s/192\.168\.[0-9]+\.[0-9]+/${{ inputs.ip_addr }}/g" "$CFG"
+          fi
+
+          # root password — SHA-512 (OpenWrt shadow format)
+          if [ -n "${{ inputs.root_password }}" ] && [ -f "$SHADOW" ]; then
+            HASH=$(openssl passwd -6 '${{ inputs.root_password }}')
+            sed -i "s|^root:[^:]*:|root:${HASH}:|" "$SHADOW"
+          fi
+
+          # default shell — replace ash with user's choice
+          if [ -f "$PASSWD" ]; then
+            sed -i "s|/bin/ash|/bin/${{ inputs.shell }}|g" "$PASSWD"
+          fi
+
+      - name: Add custom feeds & update
+        working-directory: wrt
+        run: |
+          [ -n "${{ inputs.custom_feeds }}" ] && \
+            echo "${{ inputs.custom_feeds }}" | tr ';' '\n' >> feeds.conf.default
+          ./scripts/feeds update -a && ./scripts/feeds install -a
+
+      - name: Setup .config
+        working-directory: wrt
+        run: |
+          CONFIG="${{ inputs.config_path || 'config/x86_64_config' }}"
+          [ -f "../$CONFIG" ] && cp "../$CONFIG" .config
+          make defconfig
+
+      # ── Build ─────────────────────────────────────────────────────────────
+      - name: Download packages
+        working-directory: wrt
+        run: time make download -j1 --ignore-errors
+
+      - name: Compile
+        working-directory: wrt
+        run: |
+          JOBS=$([ "${{ inputs.threads }}" = "0" ] && nproc || echo "${{ inputs.threads }}")
+          time make world -j"$JOBS" 2>&1 | tee world.log \
+            || { time make world -j1 V=s 2>&1 | tee -a world.log; exit 1; }
+
+      # ── Artifacts ─────────────────────────────────────────────────────────
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: ${{ inputs.project }}-${{ steps.meta.outputs.tag }}-${{ github.run_number }}
+          path: wrt/bin/targets/**
+          retention-days: 30
+
+      - name: Upload .config
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: ${{ inputs.project }}-config-${{ github.run_number }}
+          path: wrt/.config
+          retention-days: 7
+
+      - name: Upload build log (on failure)
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ${{ inputs.project }}-log-${{ github.run_number }}
+          path: wrt/world.log
+          retention-days: 7
+
+      - name: Draft GitHub release
+        if: inputs.publish_release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          files: wrt/bin/targets/**
+          tag_name: ${{ inputs.project }}-${{ steps.meta.outputs.tag }}
+          name: "${{ inputs.project }} ${{ steps.meta.outputs.tag }}"
+          draft: true

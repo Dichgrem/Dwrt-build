@@ -1,59 +1,51 @@
 name: Scheduled Build
-# Automatically checks downloads.openwrt.org for a new stable release.
-# If a new version is found (compared to our last published release),
-# it clones, builds, and drafts a GitHub release.
 on:
   schedule:
     - cron: "0 0 * * *"
   workflow_dispatch: {}
 
 env:
-  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  OPENWRT_URL: https://git.openwrt.org/openwrt/openwrt.git
-  CONFIG_PATH: config/x86_64_config
+  GH_TOKEN:    ${{ secrets.GITHUB_TOKEN }}
+  CONFIG_PATH: config/nokia_ea0326gmp_config
   EXTRA_FEEDS: |
     src-git luci-app-zzz https://github.com/Dichgrem/luci-app-zzz.git
     src-git momo https://github.com/nikkinikki-org/OpenWrt-momo.git
 
 jobs:
-  # ── 1. Check whether a new stable release exists ──────────────────────────
+  # ── 1. Detect new openwrt stable release ──────────────────────────────────
   check:
     runs-on: ubuntu-latest
     outputs:
       has_update: ${{ steps.check.outputs.has_update }}
       tag:        ${{ steps.check.outputs.tag }}
     steps:
-      - name: Compare upstream stable vs last built
+      - name: Check openwrt
         id: check
         run: |
-          # Official source of truth: downloads.openwrt.org/.versions.json
-          VER=$(curl -fsL "https://downloads.openwrt.org/.versions.json" \
-                | jq -r '.stable_version')
+          VER=$(curl -fsL "https://downloads.openwrt.org/.versions.json" | jq -r '.stable_version')
           LATEST="v${VER}"
-
-          # What did we last build? Look for releases tagged "openwrt-vX.Y.Z"
           CURRENT=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 30 \
-            | awk '/^openwrt-v[0-9]/{print $1; exit}' \
-            | sed 's/^openwrt-//' || true)
-
-          echo "Current: ${CURRENT:-none}   Latest upstream: $LATEST"
+            | awk '/^openwrt-v[0-9]/{print $1; exit}' | sed 's/^openwrt-//' || true)
+          echo "current=${CURRENT:-none} latest=$LATEST"
           if [ -n "$LATEST" ] && [ "$CURRENT" != "$LATEST" ]; then
-            echo "has_update=true"  >> "$GITHUB_OUTPUT"
-            echo "tag=$LATEST"      >> "$GITHUB_OUTPUT"
+            echo "has_update=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$LATEST"     >> "$GITHUB_OUTPUT"
           else
             echo "has_update=false" >> "$GITHUB_OUTPUT"
           fi
 
-  # ── 2. Build & release ────────────────────────────────────────────────────
+  # ── 2. Build ───────────────────────────────────────────────────────────────
   build:
     needs: check
     if: needs.check.outputs.has_update == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/{ghc,az,microsoft}
           sudo apt-get update -qq
@@ -66,17 +58,57 @@ jobs:
             libyaml-dev uuid-dev device-tree-compiler antlr3 gperf time bc jq \
             xxd swig upx-ucl ccache ecj fastjar imagemagick llvm libbpf-dev u-boot-tools
 
-      - name: Clone & checkout ${{ needs.check.outputs.tag }}
+      - name: Clone & checkout
         run: |
-          git clone "$OPENWRT_URL" wrt
+          git clone https://git.openwrt.org/openwrt/openwrt.git wrt
           cd wrt && git fetch --tags && git checkout "${{ needs.check.outputs.tag }}"
-          echo "📌 $(git describe --tags --always)"
+          echo "$(git -C wrt describe --tags --always)"
 
-      - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
+      - name: Clone argon theme
+        working-directory: wrt
+        run: |
+          git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon.git \
+            package/luci-theme-argon
+          git clone --depth 1 https://github.com/jerrykuku/luci-app-argon-config.git \
+            package/luci-app-argon-config
+
+      - name: Apply system tweaks
+        working-directory: wrt
+        run: |
+          mkdir -p package/base-files/files/etc/uci-defaults
+          cat > package/base-files/files/etc/uci-defaults/99-set-theme << 'EOF'
+          uci set luci.main.mediaurlbase=/luci-static/argon
+          uci commit luci
+          EOF
+          chmod +x package/base-files/files/etc/uci-defaults/99-set-theme
+
+          mkdir -p package/base-files/files/etc/sysctl.d
+          cat > package/base-files/files/etc/sysctl.d/99-bbr.conf << 'EOF'
+          net.core.default_qdisc=fq_codel
+          net.ipv4.tcp_congestion_control=bbr
+          EOF
+
+      - name: Feeds & config
+        working-directory: wrt
+        run: |
+          printf "%s\n" "$EXTRA_FEEDS" >> feeds.conf.default
+          ./scripts/feeds update -a && ./scripts/feeds install -a
+          [ -f "../$CONFIG_PATH" ] && cp "../$CONFIG_PATH" .config
+          make defconfig
+
+      # stupidloud/cachewrtbuild handles toolchain + ccache caching with
+      # correct timestamp restoration internally via Node.js fs.utimesSync,
+      # which is why it works where plain actions/cache + touch does not.
+      # mixkey distinguishes caches per openwrt version.
+      - name: Cache toolchain & ccache
+        uses: stupidloud/cachewrtbuild@main
         with:
-          key: ${{ runner.os }}-openwrt-${{ needs.check.outputs.tag }}
-          max-size: 2G
+          ccache:   'true'
+          toolchain: 'true'
+          skip:     'true'
+          clean:    'false'
+          prefix:   '${{ github.workspace }}/wrt'
+          mixkey:   'openwrt-${{ needs.check.outputs.tag }}'
 
       - name: Cache downloads
         uses: actions/cache@v4
@@ -85,13 +117,9 @@ jobs:
           key: ${{ runner.os }}-dl-openwrt-${{ needs.check.outputs.tag }}
           restore-keys: ${{ runner.os }}-dl-openwrt-
 
-      - name: Apply feeds, config & build
+      - name: Download & compile
         working-directory: wrt
         run: |
-          printf "%s\n" "$EXTRA_FEEDS" >> feeds.conf.default
-          ./scripts/feeds update -a && ./scripts/feeds install -a
-          [ -f "../$CONFIG_PATH" ] && cp "../$CONFIG_PATH" .config
-          make defconfig
           time make download -j1 --ignore-errors
           time make world -j$(nproc) 2>&1 | tee world.log \
             || { time make world -j1 V=s 2>&1 | tee -a world.log; exit 1; }
@@ -104,10 +132,12 @@ jobs:
           path: wrt/world.log
           retention-days: 7
 
-      - name: Draft GitHub release
+      - name: Draft release
         uses: softprops/action-gh-release@v2
         with:
-          files: wrt/bin/targets/**
+          files: |
+            wrt/bin/targets/**
+            !wrt/bin/targets/**/packages/**
           tag_name: openwrt-${{ needs.check.outputs.tag }}
           name: "OpenWrt ${{ needs.check.outputs.tag }}"
           draft: true

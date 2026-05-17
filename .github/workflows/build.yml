@@ -227,13 +227,15 @@ jobs:
           path: wrt/world.log
           retention-days: 7
 
-      - name: Draft release
+      - name: Remove .apk files before release
+        if: inputs.publish_release == true
+        run: find wrt/bin/targets -name '*.apk' -delete
+
+      - name: Publish release
         if: inputs.publish_release == true
         uses: softprops/action-gh-release@v2
         with:
           files: |
             wrt/bin/targets/**
-            !**/*.apk
           tag_name: ${{ inputs.project }}-${{ steps.meta.outputs.tag }}
           name: "${{ inputs.project }} ${{ steps.meta.outputs.tag }}"
-          draft: true
